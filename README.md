@@ -1,1 +1,1 @@
-DeathGame-in-Russian-Rullet
+DeathGame-in-Russian-Rulette
