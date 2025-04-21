@@ -1,275 +1,76 @@
-## 4.1 CSV 로드 & 초기 프레임 렌더링
 
-### 4.1‑① CSV 다운로드 요청 → 응답 수신 (1 – 7)
+## ✅ 주요 태스크 (구현 기능)
 
-```mermaid
-sequenceDiagram
-    participant Test2Page as Test2 페이지 컴포넌트
-    participant LoaderHook as useChunkedCSVLoader
-    participant LoadingHook as useLoading
-    participant ProgressComp as ProgressIndicator 컴포넌트
-    participant LoadingUtils as loadingUtils
-    participant Browser API
+*   **오디오 컨트롤:** 재생, 일시정지, 정지 기능 구현 (`ControlsPanel`, `usePlayerTimer`)
+*   **재생 속도 조절:** Range Input을 이용한 재생 속도 변경 (0.25x ~ 3.0x) (`ControlsPanel`, `usePlayerTimer`)
+*   **프로그레스 바:**
+    *   현재 재생 시간 및 전체 시간 표시 (`ProgressBar`, `formatTime`)
+    *   클릭 시 해당 시간으로 탐색(seek) 기능 구현 (`ProgressBar`, `App > handleSeek`, `usePlayerTimer > seek`)
+    *   재생 진행률 시각화 (`ProgressBar`)
+*   **가사 동기화 및 하이라이트:**
+    *   현재 재생 시간에 맞는 가사 표시 (이전, 현재, 다음 라인) (`LyricsDisplay`, `useCurrentLyricInfo > findLyricIdx`)
+    *   현재 가사 진행률에 따른 배경 하이라이트 효과 (`LyricsDisplay`, `useCurrentLyricInfo > calcProgress`)
+*   **정확한 타이머 구현:** `requestAnimationFrame`과 `performance.now()`를 사용한 부드럽고 정확한 타이머 루프 구현 (`useAnimationLoop`)
 
-    Test2Page->>LoaderHook: 1. 초기화 (CSV_DATA_PATH 전달)
-    LoaderHook->>LoadingHook: 2. 초기화 (loadingHandler 생성)
-    Test2Page->>ProgressComp: 3. 초기 로딩 상태 표시 (loading=true)
-    LoaderHook->>LoadingUtils: 4. downloadCSV(path, loadingHandler)
-    LoadingUtils->>Browser API: 5. fetch(path)
-    Browser API-->>LoadingUtils: 6. CSV 텍스트 응답
-    LoadingUtils-->>LoaderHook: 7. CSV 텍스트 반환 (진행률 업데이트)
+## 🤔 문제 해결 방식 및 핵심 로직
 
-```
+이 프로젝트는 React의 상태 관리 및 컴포넌트 모델을 기반으로 하며, 복잡한 상태 로직과 UI를 분리하기 위해 커스텀 훅을 적극적으로 활용했습니다.
 
-### 4.1‑② CSV 파싱 → 온도 데이터 추출 (8 – 12)
+**1. 핵심 로직 분리 (커스텀 훅 & 유틸리티):**
 
-```mermaid
-sequenceDiagram
-    participant LoaderHook as useChunkedCSVLoader
-    participant ParserUtil as csvParser
-    participant LoaderUtils as csvLoaderUtils
+*   **`usePlayerTimer`:** 재생 상태(`isPlaying`, `currentTime`, `playbackRate`)와 이를 제어하는 함수(`play`, `pause`, `stop`, `seek`, `setRate`)를 관리하는 핵심 훅입니다. 내부에 `useAnimationLoop`를 사용하여 타이머 로직을 통합 관리합니다.
+*   **`useAnimationLoop`:** `requestAnimationFrame`을 사용하여 오디오 재생 시간을 부드럽게 업데이트하는 역할을 합니다. `performance.now()`를 통해 정확한 시간 경과(delta)를 계산하고, `playbackRate`를 반영하여 `currentTime`을 업데이트합니다. 재생 상태(`isPlaying`)에 따라 루프를 시작/중지합니다.
+*   **`useCurrentLyricInfo`:** `currentTime`을 기반으로 현재 가사 인덱스(`findLyricIdx`)와 해당 가사의 진행률(`calcProgress`)을 계산하여 가사 동기화 및 하이라이트에 필요한 정보를 제공합니다.
+*   **유틸리티 함수 (`utils/`):**
+    *   `lyricTiming.ts`: 가사 데이터로부터 각 라인의 시작 시간(`timePoints`)과 총 재생 시간(`totalDuration`)을 계산하고, 현재 시간에 맞는 가사 인덱스를 찾는 순수 함수를 제공합니다.
+    *   `lyricsHighlight.ts`: 현재 시간과 가사 타이밍 정보를 바탕으로 가사 하이라이트 진행률(0~100%)을 계산하는 순수 함수를 제공합니다.
+    *   `timeUtils.ts`: 시간 포맷팅, `performance.now()` 리셋 등 시간 관련 보조 함수를 제공합니다.
 
-    LoaderHook->>ParserUtil: 8. parseCSV(csvText)
-    ParserUtil-->>LoaderHook: 9. 파싱된 행 (string[]) 반환
-    LoaderHook->>LoaderUtils: 10. extractTemperatureData(rows, loadingHandler)
-    LoaderUtils->>ParserUtil: 11. extractTemperatureValue 반복 호출
-    LoaderUtils-->>LoaderHook: 12. 온도 데이터 배열 및 min/max Temp 반환 (진행률 업데이트)
+**2. 상태 흐름 및 컴포넌트 상호작용 (시퀀스 다이어그램):**
 
-```
-
-### 4.1‑③ 프레임 생성 & 로딩 완료 (13 – 16)
+다음은 사용자가 '재생' 버튼을 누르고 '프로그레스 바'를 클릭했을 때의 대략적인 로직 흐름입니다.
 
 ```mermaid
 sequenceDiagram
-    participant LoaderHook as useChunkedCSVLoader
-    participant FrameUtils as temperatureFrameUtils
-    participant LoadingHook as useLoading
-    participant Test2Page as Test2 페이지 컴포넌트
+    participant User
+    participant UI (Components)
+    participant App
+    participant usePlayerTimer
+    participant useAnimationLoop
+    participant useCurrentLyricInfo
+    participant Utils
 
-    LoaderHook->>FrameUtils: 13. generateFrames(temperatureData, loadingHandler)
-    FrameUtils-->>LoaderHook: 14. 프레임 배열 (number[][]) 반환 (진행률 업데이트)
-    LoaderHook->>LoadingHook: 15. 로딩 완료 상태 설정 (loading=false)
-    LoaderHook-->>Test2Page: 16. 최종 데이터 반환 { frames, minTemp, maxTemp }
+    User->>UI (ControlsPanel): 재생 버튼 클릭
+    UI (ControlsPanel)-->>App: handlePlayPause() 호출
+    App->>usePlayerTimer: play() 호출
+    usePlayerTimer->>usePlayerTimer: isPlaying = true (State 업데이트)
+    usePlayerTimer->>useAnimationLoop: useEffect 실행 (isPlaying 변경 감지)
+    useAnimationLoop->>useAnimationLoop: requestAnimationFrame(runAnimation) 시작
 
-```
-
-### 4.1‑④ 렌더러 초기화 & 첫 프레임 표시 (17 – 25)
-
-```mermaid
-sequenceDiagram
-    participant Test2Page as Test2 페이지 컴포넌트
-    participant PlayerHook as useFramePlayer
-    participant ColorMapHook as useColorMap
-    participant RendererHook as useCanvasRenderer
-    participant CanvasComp as ThermalCanvas 컴포넌트
-    participant pixelUtils as pixelUtils
-    participant User as 사용자
-
-    Test2Page->>PlayerHook: 17. 초기화 (frameCount 전달)
-    PlayerHook-->>Test2Page: 18. currentFrame=0 반환
-    Test2Page->>ColorMapHook: 19. 초기화 (minTemp, maxTemp 전달)
-    ColorMapHook-->>Test2Page: 20. colorMap 함수 반환
-    Test2Page->>RendererHook: 21. 초기화 (canvasRef, firstFrameData, width, height, colorMap 전달)
-    RendererHook->>CanvasComp: 22. getContext('2d') 및 createImageData()
-    RendererHook->>pixelUtils: 23. mapPixelColors, applyPixelColors 호출
-    RendererHook->>CanvasComp: 24. putImageData(imageData)
-    CanvasComp-->>User: 25. 첫 프레임 이미지 표시
-
-```
-
----
-
-## 4.2 프레임 재생 컨트롤 (재생/정지)
-
-### 4.2‑① Play 버튼 처리 & isPlaying 활성화 (1 – 4)
-
-```mermaid
-sequenceDiagram
-    participant User as 사용자
-    participant FrameControlsComp as FrameControls 컴포넌트
-    participant Test2Page as Test2 페이지 컴포넌트
-    participant PlayerHook as useFramePlayer
-
-    User->>FrameControlsComp: 1. 재생(Play) 버튼 클릭
-    FrameControlsComp->>Test2Page: 2. onPlayToggle() 호출
-    Test2Page->>Test2Page: 3. isPlaying=true
-    Test2Page->>PlayerHook: 4. isPlaying=true 전달 (useEffect 시작)
-
-```
-
-### 4.2‑② FPS 루프‑프레임 업데이트 & 렌더 (5 – 9)
-
-```mermaid
-sequenceDiagram
-    participant PlayerHook as useFramePlayer
-    participant Test2Page as Test2 페이지 컴포넌트
-    participant RendererHook as useCanvasRenderer
-    participant CanvasComp as ThermalCanvas 컴포넌트
-    participant pixelUtils as pixelUtils
-
-    loop FPS 간격마다
-        PlayerHook->>PlayerHook: 5. currentFrame 업데이트
-        PlayerHook-->>Test2Page: 6. currentFrame 값 전달
-        Test2Page->>RendererHook: 7. currentFrameData 전달
-        RendererHook->>pixelUtils: 8. filterChangedPixels, applyPixelColors 호출
-        RendererHook->>CanvasComp: 9. putImageData(updatedImageData)
+    loop Animation Loop (isPlaying=true)
+        useAnimationLoop->>useAnimationLoop: runAnimation() 실행
+        useAnimationLoop->>Utils: calcNewTime() 호출 (시간 계산)
+        Utils-->>useAnimationLoop: newTime 반환
+        useAnimationLoop->>usePlayerTimer: setCurrentTime(newTime) 호출
+        usePlayerTimer->>usePlayerTimer: currentTime 업데이트
     end
 
+    usePlayerTimer-->>App: 업데이트된 state (isPlaying, currentTime) 전달
+    App->>useCurrentLyricInfo: 업데이트된 currentTime 전달
+    useCurrentLyricInfo->>Utils: findLyricIdx() 호출
+    useCurrentLyricInfo->>Utils: calcProgress() 호출
+    Utils-->>useCurrentLyricInfo: 계산 결과 (index, progress) 반환
+    useCurrentLyricInfo-->>App: 업데이트된 정보 전달
+    App->>UI (Components): 업데이트된 props 전달 (currentTime, isPlaying, lyric info 등)
+    UI (Components)-->>User: 화면 업데이트 (프로그레스 바, 가사 하이라이트 등)
+
+
+    User->>UI (ProgressBar): 프로그레스 바 특정 위치 클릭
+    UI (ProgressBar)-->>App: handleSeek(event) 호출
+    App->>App: 클릭 위치 비율 계산
+    App->>usePlayerTimer: seek(calculatedTime) 호출
+    usePlayerTimer->>usePlayerTimer: currentTime = calculatedTime (State 업데이트, 범위 제한 포함)
+    Note over usePlayerTimer, App: currentTime 변경으로 위와 유사한 업데이트 흐름 발생 (가사 정보 갱신, UI 리렌더)
 ```
 
-### 4.2‑③ Pause 버튼 처리 & 루프 정지 (10 – 13)
-
-```mermaid
-sequenceDiagram
-    participant User as 사용자
-    participant FrameControlsComp as FrameControls 컴포넌트
-    participant Test2Page as Test2 페이지 컴포넌트
-    participant PlayerHook as useFramePlayer
-
-    User->>FrameControlsComp: 10. 정지(Pause) 버튼 클릭
-    FrameControlsComp->>Test2Page: 11. onPlayToggle() 호출
-    Test2Page->>Test2Page: 12. isPlaying=false
-    Test2Page->>PlayerHook: 13. isPlaying=false 전달 (clearInterval)
-
-```
-
----
-
-## 4.3 이미지 크롭 & 스냅샷 생성
-
-### 4.3‑① Crop 모드 진입 (1 – 4)
-
-```mermaid
-sequenceDiagram
-    participant User as 사용자
-    participant FrameControlsComp as FrameControls 컴포넌트
-    participant Test2Page as Test2 페이지 컴포넌트
-    participant CanvasComp as ThermalCanvas 컴포넌트
-
-    User->>FrameControlsComp: 1. '크롭 모드' 클릭
-    FrameControlsComp->>Test2Page: 2. onCropToggle() 호출
-    Test2Page->>Test2Page: 3. cropMode=true, isPlaying=false
-    Test2Page->>CanvasComp: 4. cropMode=true 전달
-
-```
-
-### 4.3‑② 드래그·영역 미리보기 (5 – 7)
-
-```mermaid
-sequenceDiagram
-    participant User as 사용자
-    participant CanvasComp as ThermalCanvas 컴포넌트
-    participant SnapshotHook as useSnapshotCreator
-
-    User->>CanvasComp: 5. 캔버스 드래그
-    CanvasComp->>CanvasComp: 6. 드래그 영역 계산·미리보기
-    CanvasComp->>SnapshotHook: 7. onCropSelected(finalCropArea)
-
-```
-
-### 4.3‑③ 임시 캔버스 → 통계 계산 (8 – 13)
-
-```mermaid
-sequenceDiagram
-    participant SnapshotHook as useSnapshotCreator
-    participant Test2Page as Test2 페이지 컴포넌트
-    participant Browser API
-    participant CanvasComp as ThermalCanvas 컴포넌트
-    participant SnapshotUtil as snapShotUtils
-
-    SnapshotHook->>Test2Page: 8. setIsPlaying(false)
-    SnapshotHook->>Browser API: 9. 임시 캔버스 생성
-    SnapshotHook->>CanvasComp: 10. getCanvasElement()
-    SnapshotHook->>Browser API: 11. drawImage(mainCanvas, cropArea)
-    SnapshotHook->>SnapshotUtil: 12. calculateCroppedStats(...)
-    SnapshotUtil-->>SnapshotHook: 13. min/max/avg 반환
-
-```
-
-### 4.3‑④ DataURL 생성 & snapshots 업데이트 (14 – 21)
-
-```mermaid
-sequenceDiagram
-    participant SnapshotHook as useSnapshotCreator
-    participant DateUtil as dateUtils
-    participant Browser API
-    participant Test2Page as Test2 페이지 컴포넌트
-
-    SnapshotHook->>DateUtil: 14. getFormattedTimestamp()
-    DateUtil-->>SnapshotHook: 15. 시간 문자열
-    SnapshotHook->>Browser API: 16. 임시 캔버스 toDataURL
-    Browser API-->>SnapshotHook: 17. 이미지 DataURL
-    SnapshotHook->>Test2Page: 18. setSnapshots([...prev, newSnapshot])
-    Test2Page->>Test2Page: 19. snapshots 상태 업데이트
-    SnapshotHook->>Test2Page: 20. setCropMode(false)
-    Test2Page->>Test2Page: 21. cropMode=false
-
-```
-
----
-
-## 4.4 스냅샷 카드 다운로드
-
-### 4.4‑① DOM → Canvas 렌더 (1 – 6)
-
-```mermaid
-sequenceDiagram
-    participant User as 사용자
-    participant SnapshotListComp as SnapshotList 컴포넌트
-    participant BrowserAPI as Browser API
-    participant Html2CanvasLib as html2canvas
-
-    User->>SnapshotListComp: 1. '다운로드' 버튼 클릭
-    SnapshotListComp->>SnapshotListComp: 2. downloadSnapshotCard(timestamp)
-    SnapshotListComp->>BrowserAPI: 3. '.snapshot-card' 요소 찾기
-    SnapshotListComp->>Html2CanvasLib: 4. html2canvas(cardElement)
-    Html2CanvasLib->>BrowserAPI: 5. DOM 분석·렌더링
-    Html2CanvasLib-->>SnapshotListComp: 6. 캔버스 객체
-
-```
-
-### 4.4‑② DataURL → PNG 저장 (7 – 10)
-
-```mermaid
-sequenceDiagram
-    participant SnapshotListComp as SnapshotList 컴포넌트
-    participant BrowserAPI as Browser API
-    participant User as 사용자
-
-    SnapshotListComp->>BrowserAPI: 7. canvas.toDataURL('image/png')
-    BrowserAPI-->>SnapshotListComp: 8. 데이터 URL
-    SnapshotListComp->>BrowserAPI: 9. <a> 생성·click()
-    BrowserAPI-->>User: 10. 파일 저장 프롬프트
-
-```
-
----
-
-## 4.5 온도 데이터 차트 표시 (스냅샷 카드 내)
-
-### 4.5‑① 스냅샷 전달 & 개별 차트 렌더 (1 – 2)
-
-```mermaid
-sequenceDiagram
-    participant Test2Page as Test2 페이지 컴포넌트
-    participant SnapshotListComp as SnapshotList 컴포넌트
-    participant TempBarChartComp as TemperatureBarChart 컴포넌트
-
-    Test2Page->>SnapshotListComp: 1. snapshots, overallMin/MaxTemp
-    loop 각 snapshot
-        SnapshotListComp->>TempBarChartComp: 2. stats, minTemp, maxTemp
-    end
-
-```
-
-### 4.5‑② 막대 높이 계산 & 그리기 (3 – 4)
-
-```mermaid
-sequenceDiagram
-    participant TempBarChartComp as TemperatureBarChart 컴포넌트
-    participant BrowserAPI as Browser API
-
-    TempBarChartComp->>TempBarChartComp: 3. 막대 높이 계산
-    TempBarChartComp->>BrowserAPI: 4. div 막대 렌더링
-
-```
+이 구조를 통해 각 부분의 책임을 명확히 하고, 상태 변경에 따른 업데이트 흐름을 예측 가능하게 만들었습니다.
